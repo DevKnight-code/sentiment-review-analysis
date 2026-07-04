@@ -126,6 +126,19 @@ def get_sentiment_distribution() -> dict:
     return {doc["_id"]: doc["count"] for doc in get_dataset_col().aggregate(pipeline)}
 
 
+def get_unretrained_count() -> int:
+    """Return the number of dataset rows added since the last retrain."""
+    return get_dataset_col().count_documents({"retrained": {"$ne": True}})
+
+
+def mark_all_retrained():
+    """Mark all dataset rows as included in the latest retrain."""
+    get_dataset_col().update_many(
+        {"retrained": {"$ne": True}},
+        {"$set": {"retrained": True}},
+    )
+
+
 # ── Predictions ───────────────────────────────────────────────────────────────
 
 def save_prediction(text: str, sentiment: str, confidence: float, probabilities: dict):

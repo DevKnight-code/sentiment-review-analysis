@@ -442,12 +442,18 @@ class SentimentAnalyzer:
             except Exception as e:
                 print(f"[MongoDB] _add_analyzed_review failed: {e}")
 
-            # Only queue for retraining if high confidence
+            # Queue for retraining if high confidence — use DB count so restarts
+            # don't reset the counter to zero
             if confidence > 0.7:
                 self.analyzed_reviews.append({
                     'text': text, 'sentiment': prediction, 'confidence': confidence
                 })
-                if len(self.analyzed_reviews) >= 20:
+                # Check total unanalyzed count in DB, not just in-memory list
+                try:
+                    total_since_last = db.get_unretrained_count()
+                except Exception:
+                    total_since_last = len(self.analyzed_reviews)
+                if total_since_last >= 20:
                     self._retrain_with_analyzed_reviews()
         else:
             # File fallback — queue high-confidence reviews for retraining
@@ -460,7 +466,25 @@ class SentimentAnalyzer:
                     self._retrain_with_analyzed_reviews()
 
     def _retrain_with_analyzed_reviews(self):
-        """Retrain the model with accumulated analyzed reviews."""
+        """Retrain the model with new reviews accumulated since last retrain."""
+        if _mongo_available:
+            try:
+                # Load ALL dataset rows from MongoDB (the source of truth)
+                rows = db.load_dataset()
+                if not rows:
+                    return
+                full_df = pd.DataFrame(rows)
+                print(f"[Retrain] Retraining on full MongoDB dataset: {len(full_df)} rows")
+                self.train_model(full_df, incremental=False)
+                # Mark all as trained so the counter resets
+                db.mark_all_retrained()
+            except Exception as e:
+                print(f"[Retrain] MongoDB retrain failed: {e}")
+            finally:
+                self.analyzed_reviews = []
+            return
+
+        # File fallback
         if not self.analyzed_reviews:
             return
 
@@ -475,7 +499,7 @@ class SentimentAnalyzer:
             new_data_filtered = new_data[~new_data['review'].str.lower().isin(existing_texts)]
             if len(new_data_filtered) > 0:
                 combined_df = pd.concat([self.dataset, new_data_filtered], ignore_index=True)
-                print(f"Retraining with {len(combined_df)} samples "
+                print(f"[Retrain] Retraining with {len(combined_df)} samples "
                       f"({len(new_data_filtered)} new analyzed reviews)")
                 self.train_model(combined_df, incremental=False)
 
@@ -643,29 +667,45 @@ class SentimentAnalyzer:
 
     def retrain_with_feedback(self):
         """Retrain the model using accumulated user feedback."""
-        if not self.user_feedback_data:
+        if not self.user_feedback_data and not (_mongo_available and db.get_feedback_count() > 0):
             return
 
+        if _mongo_available:
+            try:
+                # Load full dataset + pending feedback from MongoDB
+                rows = db.load_dataset()
+                feedback_rows = db.load_pending_feedback()
+                if not rows and not feedback_rows:
+                    return
+                base_df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=['review', 'sentiment'])
+                fb_df = pd.DataFrame([{
+                    'review': f['text'], 'sentiment': f['actual_sentiment']
+                } for f in feedback_rows]) if feedback_rows else pd.DataFrame(columns=['review', 'sentiment'])
+                combined_df = pd.concat([base_df, fb_df], ignore_index=True).drop_duplicates(subset='review')
+                print(f"[Retrain] Feedback retrain on {len(combined_df)} rows "
+                      f"({len(fb_df)} from feedback)")
+                self.train_model(combined_df, incremental=False)
+                db.mark_feedback_used()
+                db.mark_all_retrained()
+            except Exception as e:
+                print(f"[MongoDB] retrain_with_feedback failed: {e}")
+            finally:
+                self.user_feedback_data = []
+            return
+
+        # File fallback
+        if not self.user_feedback_data:
+            return
         feedback_df = pd.DataFrame(self.user_feedback_data)
         new_data = pd.DataFrame({
             'review':    feedback_df['text'],
             'sentiment': feedback_df['actual_sentiment']
         })
-
         combined_df = pd.concat([self.dataset, new_data], ignore_index=True) \
                       if self.dataset is not None else new_data
-
-        print(f"Retraining with {len(combined_df)} samples "
+        print(f"[Retrain] Retraining with {len(combined_df)} samples "
               f"({len(new_data)} from feedback)")
-        self.train_model(combined_df, incremental=True)
-
-        # Mark feedback as used in MongoDB
-        if _mongo_available:
-            try:
-                db.mark_feedback_used()
-            except Exception as e:
-                print(f"[MongoDB] mark_feedback_used failed: {e}")
-
+        self.train_model(combined_df, incremental=False)
         self.user_feedback_data = []
 
     
@@ -949,17 +989,28 @@ def get_dataset_stats():
 
 @app.route('/api/retrain', methods=['POST'])
 def force_retrain():
-    """Force model retraining with current feedback data"""
+    """Force model retraining with all data in MongoDB (feedback + analyzed reviews)."""
     try:
-        if not analyzer.user_feedback_data and not analyzer.analyzed_reviews:
-            return jsonify({'error': 'No feedback data or analyzed reviews available for retraining'}), 400
-        
-        if analyzer.user_feedback_data:
+        has_feedback = bool(analyzer.user_feedback_data)
+        has_analyzed = bool(analyzer.analyzed_reviews)
+
+        # Also check MongoDB directly — in-memory lists reset on restart
+        if _mongo_available:
+            try:
+                has_feedback = has_feedback or db.get_feedback_count() > 0
+                has_analyzed = has_analyzed or db.get_dataset_count() > 152  # > base sample size
+            except Exception:
+                pass
+
+        if not has_feedback and not has_analyzed:
+            return jsonify({'error': 'No new data available for retraining. '
+                                     'Submit some reviews or feedback first.'}), 400
+
+        if has_feedback:
             analyzer.retrain_with_feedback()
-        
-        if analyzer.analyzed_reviews:
+        else:
             analyzer._retrain_with_analyzed_reviews()
-        
+
         return jsonify({
             'success': True,
             'message': 'Model retrained successfully',

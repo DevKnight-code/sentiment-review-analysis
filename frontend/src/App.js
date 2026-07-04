@@ -549,6 +549,7 @@ const ModelMetrics = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retraining, setRetraining] = useState(false);
+  const [retrainMsg, setRetrainMsg] = useState('');
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   useEffect(() => {
@@ -588,13 +589,14 @@ const ModelMetrics = () => {
 
   const forceRetrain = async () => {
     setRetraining(true);
+    setRetrainMsg('');
     try {
       const response = await axios.post(`${API_BASE_URL}/retrain`);
       setMetrics(response.data.metrics);
       await fetchDatasetStats();
-      alert('Model retrained successfully!');
+      setRetrainMsg('Model retrained successfully!');
     } catch (err) {
-      alert('Failed to retrain model: ' + (err.response?.data?.error || err.message));
+      setRetrainMsg('Retrain failed: ' + (err.response?.data?.error || err.message));
     } finally {
       setRetraining(false);
     }
@@ -660,7 +662,7 @@ const ModelMetrics = () => {
             <button 
               className="btn btn-primary" 
               onClick={forceRetrain}
-              disabled={retraining || (!datasetStats?.feedback_samples && !datasetStats?.analyzed_reviews_pending)}
+              disabled={retraining || !datasetStats || datasetStats.total_reviews <= 152}
             >
               {retraining ? (
                 <>
@@ -676,6 +678,19 @@ const ModelMetrics = () => {
             </button>
           </div>
         </div>
+
+        {retrainMsg && (
+          <div style={{
+            padding: '10px 16px',
+            borderRadius: '6px',
+            marginBottom: '20px',
+            background: retrainMsg.startsWith('Model retrained') ? '#d4edda' : '#f8d7da',
+            color:      retrainMsg.startsWith('Model retrained') ? '#155724' : '#721c24',
+            fontWeight: '500'
+          }}>
+            {retrainMsg}
+          </div>
+        )}
 
         {/* Dataset Statistics */}
         {datasetStats && (
