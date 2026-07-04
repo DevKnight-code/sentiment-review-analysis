@@ -664,6 +664,19 @@ const ModelMetrics = () => {
     );
   }
 
+  // Guard: metrics must be a non-empty object before rendering
+  if (!metrics || typeof metrics.accuracy === 'undefined') {
+    return (
+      <div className="container">
+        <div className="card">
+          <div style={{ color: '#6c757d', textAlign: 'center', padding: '40px' }}>
+            No metrics available yet. The model may still be training — refresh in a moment.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container">
       <div className="card">
@@ -732,27 +745,27 @@ const ModelMetrics = () => {
               </div>
               
               <div className="metric-card">
-                <div className="metric-value">{datasetStats.average_review_length?.toFixed(0)}</div>
+                <div className="metric-value">{datasetStats.average_review_length?.toFixed(0) ?? '—'}</div>
                 <div className="metric-label">Avg Review Length</div>
               </div>
               
               <div className="metric-card">
-                <div className="metric-value">{(datasetStats.model_accuracy * 100).toFixed(1)}%</div>
+                <div className="metric-value">{((datasetStats.model_accuracy ?? 0) * 100).toFixed(1)}%</div>
                 <div className="metric-label">Current Accuracy</div>
               </div>
 
               <div className="metric-card">
-                <div className="metric-value">{(datasetStats.precision * 100).toFixed(1)}%</div>
+                <div className="metric-value">{((datasetStats.precision ?? 0) * 100).toFixed(1)}%</div>
                 <div className="metric-label">Precision</div>
               </div>
 
               <div className="metric-card">
-                <div className="metric-value">{(datasetStats.recall * 100).toFixed(1)}%</div>
+                <div className="metric-value">{((datasetStats.recall ?? 0) * 100).toFixed(1)}%</div>
                 <div className="metric-label">Recall</div>
               </div>
 
               <div className="metric-card">
-                <div className="metric-value">{(datasetStats.f1_score * 100).toFixed(1)}%</div>
+                <div className="metric-value">{((datasetStats.f1_score ?? 0) * 100).toFixed(1)}%</div>
                 <div className="metric-label">F1-Score</div>
               </div>
 
@@ -771,39 +784,36 @@ const ModelMetrics = () => {
             <div style={{ marginTop: '20px' }}>
               <h4>Sentiment Distribution</h4>
               <div style={{ display: 'flex', gap: '20px', marginTop: '10px' }}>
-                {Object.entries(datasetStats.sentiment_distribution).map(([sentiment, count]) => (
-                  <div key={sentiment} style={{ flex: 1, textAlign: 'center' }}>
-                    <div style={{ 
-                      background: sentiment === 'positive' ? '#d4edda' : 
-                                 sentiment === 'negative' ? '#f8d7da' : '#e2e3e5',
-                      padding: '15px',
-                      borderRadius: '8px',
-                      border: `2px solid ${sentiment === 'positive' ? '#28a745' : 
-                                               sentiment === 'negative' ? '#dc3545' : '#6c757d'}`
-                    }}>
-                      <div style={{ 
-                        fontSize: '1.5rem', 
-                        fontWeight: 'bold',
-                        color: sentiment === 'positive' ? '#28a745' : 
-                               sentiment === 'negative' ? '#dc3545' : '#6c757d'
+                {['positive', 'negative', 'neutral'].map((sentiment) => {
+                  const count = datasetStats.sentiment_distribution?.[sentiment] ?? 0;
+                  const colors = {
+                    positive: { bg: '#d4edda', border: '#28a745', text: '#28a745' },
+                    negative: { bg: '#f8d7da', border: '#dc3545', text: '#dc3545' },
+                    neutral:  { bg: '#e2e3e5', border: '#6c757d', text: '#6c757d' },
+                  };
+                  const c = colors[sentiment];
+                  return (
+                    <div key={sentiment} style={{ flex: 1, textAlign: 'center' }}>
+                      <div style={{
+                        background: c.bg,
+                        padding: '15px',
+                        borderRadius: '8px',
+                        border: `2px solid ${c.border}`
                       }}>
-                        {count}
-                      </div>
-                      <div style={{ 
-                        textTransform: 'capitalize',
-                        fontWeight: '600',
-                        color: sentiment === 'positive' ? '#28a745' : 
-                               sentiment === 'negative' ? '#dc3545' : '#6c757d'
-                      }}>
-                        {sentiment}
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: c.text }}>
+                          {count}
+                        </div>
+                        <div style={{ textTransform: 'capitalize', fontWeight: '600', color: c.text }}>
+                          {sentiment}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
-            {datasetStats.last_retrain && (
+            {datasetStats.last_retrain && datasetStats.last_retrain !== 'Never' && (
               <div style={{ 
                 marginTop: '15px', 
                 padding: '10px', 
@@ -822,23 +832,23 @@ const ModelMetrics = () => {
         <div className="metrics-grid">
           <div className="metric-card">
             <div className="metric-value">
-              {(metrics.accuracy * 100).toFixed(1)}%
+              {((metrics.accuracy ?? 0) * 100).toFixed(1)}%
             </div>
             <div className="metric-label">Accuracy</div>
           </div>
           
           <div className="metric-card">
-            <div className="metric-value">{metrics.train_size}</div>
+            <div className="metric-value">{metrics.train_size ?? '—'}</div>
             <div className="metric-label">Training Samples</div>
           </div>
           
           <div className="metric-card">
-            <div className="metric-value">{metrics.test_size}</div>
+            <div className="metric-value">{metrics.test_size ?? '—'}</div>
             <div className="metric-label">Test Samples</div>
           </div>
 
           <div className="metric-card">
-            <div className="metric-value">{metrics.total_samples}</div>
+            <div className="metric-value">{metrics.total_samples ?? '—'}</div>
             <div className="metric-label">Total Samples</div>
           </div>
         </div>
