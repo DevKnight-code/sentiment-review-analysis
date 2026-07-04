@@ -731,6 +731,21 @@ if not analyzer.load_model():
     print("Training new model...")
     analyzer.train_model()
 
+@app.route('/', methods=['GET'])
+def index():
+    """Root endpoint for basic service health and API info."""
+    return jsonify({
+        'status': 'ok',
+        'service': 'sentiment-review-analysis',
+        'message': 'Backend is running',
+        'endpoints': [
+            '/api/health',
+            '/api/predict',
+            '/api/metrics',
+            '/api/sample-dataset'
+        ]
+    })
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
