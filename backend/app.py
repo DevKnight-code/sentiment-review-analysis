@@ -49,12 +49,20 @@ except Exception as _e:
     _mongo_available = False
     print(f"[MongoDB] Unavailable ({_e}) — using file-based persistence")
 
-# Download required NLTK data
-for resource, path in [('punkt', 'tokenizers/punkt'), ('punkt_tab', 'tokenizers/punkt_tab'), ('stopwords', 'corpora/stopwords')]:
+# Download required NLTK data - with better error handling
+nltk_downloads = [
+    ('punkt', 'tokenizers/punkt'),
+    ('stopwords', 'corpora/stopwords')
+]
+
+for resource, path in nltk_downloads:
     try:
         nltk.data.find(path)
     except LookupError:
-        nltk.download(resource, quiet=True)
+        try:
+            nltk.download(resource, quiet=True)
+        except Exception as e:
+            print(f"[NLTK] Warning: Failed to download {resource}: {e}")
 
 class SentimentAnalyzer:
     def __init__(self):
