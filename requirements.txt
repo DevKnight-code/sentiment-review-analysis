@@ -11,4 +11,3 @@ joblib==1.4.2
 pymongo==4.8.0
 python-dotenv==1.0.1
 gunicorn==21.2.0
-
