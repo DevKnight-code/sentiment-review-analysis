@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Brain, BarChart3, MessageSquare, Upload, TrendingUp, Users, FileText, Download, RefreshCw, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Brain, BarChart3, MessageSquare, Upload, TrendingUp, FileText, Download, RefreshCw, ThumbsUp, ThumbsDown } from 'lucide-react';
 import axios from 'axios';
 import './App.css';
 

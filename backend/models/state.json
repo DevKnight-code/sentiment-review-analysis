@@ -1,0 +1,80 @@
+{
+  "model_metrics": {
+    "accuracy": 0.875,
+    "classification_report": {
+      "negative": {
+        "precision": 0.8888888888888888,
+        "recall": 0.8,
+        "f1-score": 0.8421052631578947,
+        "support": 10.0
+      },
+      "neutral": {
+        "precision": 1.0,
+        "recall": 0.9090909090909091,
+        "f1-score": 0.9523809523809523,
+        "support": 11.0
+      },
+      "positive": {
+        "precision": 0.7692307692307693,
+        "recall": 0.9090909090909091,
+        "f1-score": 0.8333333333333334,
+        "support": 11.0
+      },
+      "accuracy": 0.875,
+      "macro avg": {
+        "precision": 0.886039886039886,
+        "recall": 0.8727272727272727,
+        "f1-score": 0.8759398496240601,
+        "support": 32.0
+      },
+      "weighted avg": {
+        "precision": 0.8859508547008548,
+        "recall": 0.875,
+        "f1-score": 0.8769971804511278,
+        "support": 32.0
+      }
+    },
+    "confusion_matrix": [
+      [
+        8,
+        0,
+        2
+      ],
+      [
+        0,
+        10,
+        1
+      ],
+      [
+        1,
+        0,
+        10
+      ]
+    ],
+    "test_size": 32,
+    "train_size": 127,
+    "total_samples": 159,
+    "last_updated": "2026-07-04T16:44:17.380832",
+    "precision": 0.8859508547008548,
+    "recall": 0.875,
+    "f1_score": 0.8769971804511278
+  },
+  "total_predictions": 6,
+  "user_feedback_data": [
+    {
+      "text": "find this product effective and help to reduce the hairfall",
+      "predicted_sentiment": "negative",
+      "actual_sentiment": "positive",
+      "confidence": 0.3950061346612702,
+      "timestamp": "2026-07-04T16:29:59.995531"
+    },
+    {
+      "text": "PRODUCT IS VERY AND REASONABLE PRICE AND NEW FEATURES ARE VERY EASY AND INTERACTIVE",
+      "predicted_sentiment": "neutral",
+      "actual_sentiment": "positive",
+      "confidence": 0.34679760817383964,
+      "timestamp": "2026-07-04T16:43:59.000020"
+    }
+  ],
+  "analyzed_reviews": []
+}

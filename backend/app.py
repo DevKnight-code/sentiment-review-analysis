@@ -21,16 +21,28 @@ import base64
 app = Flask(__name__)
 CORS(app)
 
-# Download required NLTK data
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
+# Use path relative to this script so it works regardless of cwd
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(BASE_DIR, 'models')
 
+# MongoDB — imported lazily so the app still starts without a configured URI
 try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')
+    import database as db
+    _mongo_available = db.is_connected()
+    if _mongo_available:
+        print("[MongoDB] Connection established — using MongoDB for persistence")
+    else:
+        print("[MongoDB] Not connected — using file-based persistence (set MONGO_URI in backend/.env)")
+except Exception as _e:
+    _mongo_available = False
+    print(f"[MongoDB] Unavailable ({_e}) — using file-based persistence")
+
+# Download required NLTK data
+for resource, path in [('punkt', 'tokenizers/punkt'), ('punkt_tab', 'tokenizers/punkt_tab'), ('stopwords', 'corpora/stopwords')]:
+    try:
+        nltk.data.find(path)
+    except LookupError:
+        nltk.download(resource, quiet=True)
 
 class SentimentAnalyzer:
     def __init__(self):
@@ -346,17 +358,26 @@ class SentimentAnalyzer:
         # Calculate confidence and determine reliability
         max_prob = float(max(probability))
         confidence_level = self._calculate_confidence_level(max_prob, probability)
-        
+
         # Increment prediction counter
         self.total_predictions += 1
-        
+
+        # Persist prediction to MongoDB (or state file as fallback)
+        if _mongo_available:
+            try:
+                db.save_prediction(text, prediction, max_prob, prob_dict)
+            except Exception as e:
+                print(f"[MongoDB] save_prediction failed: {e}")
+        else:
+            self._save_state()
+
         # Add analyzed review to dataset for continuous learning
         self._add_analyzed_review(text, prediction, max_prob)
-        
+
         return {
-            'prediction': prediction,
-            'probabilities': prob_dict,
-            'confidence': max_prob,
+            'prediction':       prediction,
+            'probabilities':    prob_dict,
+            'confidence':       max_prob,
             'confidence_level': confidence_level,
             'reliability': 'high' if max_prob > 0.7 else 'medium' if max_prob > 0.5 else 'low'
         }
@@ -377,116 +398,238 @@ class SentimentAnalyzer:
             return 'very_low'
     
     def _add_analyzed_review(self, text, prediction, confidence):
-        """Add analyzed review to dataset for continuous learning"""
-        # Only add high-confidence predictions to avoid noise
-        if confidence > 0.7:  # Only add reviews with high confidence
-            review_entry = {
-                'text': text,
-                'sentiment': prediction,
-                'confidence': confidence,
-                'timestamp': pd.Timestamp.now().isoformat(),
-                'source': 'auto_analyzed'
-            }
-            self.analyzed_reviews.append(review_entry)
-            
-            # Check if we should retrain with new analyzed reviews
-            if len(self.analyzed_reviews) >= 20:  # Retrain after 20 new high-confidence reviews
-                self._retrain_with_analyzed_reviews()
-    
+        """Save every analyzed review to MongoDB (or in-memory list as fallback)."""
+        if _mongo_available:
+            try:
+                # Save ALL reviews to MongoDB dataset collection immediately
+                added = db.add_review_to_dataset(text, prediction, source='auto_analyzed')
+                if added:
+                    # Also update in-memory dataset so stats stay in sync
+                    new_row = pd.DataFrame([{'review': text, 'sentiment': prediction}])
+                    self.dataset = pd.concat([self.dataset, new_row], ignore_index=True) \
+                                   if self.dataset is not None else new_row
+            except Exception as e:
+                print(f"[MongoDB] _add_analyzed_review failed: {e}")
+
+            # Only queue for retraining if high confidence
+            if confidence > 0.7:
+                self.analyzed_reviews.append({
+                    'text': text, 'sentiment': prediction, 'confidence': confidence
+                })
+                if len(self.analyzed_reviews) >= 20:
+                    self._retrain_with_analyzed_reviews()
+        else:
+            # File fallback — queue high-confidence reviews for retraining
+            if confidence > 0.7:
+                self.analyzed_reviews.append({
+                    'text': text, 'sentiment': prediction, 'confidence': confidence,
+                    'timestamp': pd.Timestamp.now().isoformat(), 'source': 'auto_analyzed'
+                })
+                if len(self.analyzed_reviews) >= 20:
+                    self._retrain_with_analyzed_reviews()
+
     def _retrain_with_analyzed_reviews(self):
-        """Retrain the model with analyzed reviews"""
+        """Retrain the model with accumulated analyzed reviews."""
         if not self.analyzed_reviews:
             return
-        
-        # Convert analyzed reviews to DataFrame
+
         analyzed_df = pd.DataFrame(self.analyzed_reviews)
-        
-        # Add analyzed reviews to existing dataset
         new_data = pd.DataFrame({
-            'review': analyzed_df['text'],
+            'review':    analyzed_df['text'],
             'sentiment': analyzed_df['sentiment']
         })
-        
+
         if self.dataset is not None:
-            # Check for duplicates before adding
             existing_texts = set(self.dataset['review'].str.lower())
             new_data_filtered = new_data[~new_data['review'].str.lower().isin(existing_texts)]
-            
             if len(new_data_filtered) > 0:
                 combined_df = pd.concat([self.dataset, new_data_filtered], ignore_index=True)
-                print(f"Retraining model with {len(combined_df)} samples (including {len(new_data_filtered)} new analyzed reviews)")
-                # Force full retraining instead of incremental
+                print(f"Retraining with {len(combined_df)} samples "
+                      f"({len(new_data_filtered)} new analyzed reviews)")
                 self.train_model(combined_df, incremental=False)
-        
-        # Clear analyzed reviews after retraining
+
         self.analyzed_reviews = []
     
     def save_model(self):
-        """Save the trained model and vectorizer"""
-        os.makedirs('models', exist_ok=True)
-        with open('models/sentiment_model.pkl', 'wb') as f:
+        """Save sklearn pkl to disk + all state to MongoDB (or files as fallback)."""
+        import json
+        os.makedirs(MODELS_DIR, exist_ok=True)
+
+        # Always save pkl files to disk (sklearn objects aren't stored in Mongo)
+        with open(os.path.join(MODELS_DIR, 'sentiment_model.pkl'), 'wb') as f:
             pickle.dump(self.model, f)
-        with open('models/vectorizer.pkl', 'wb') as f:
+        with open(os.path.join(MODELS_DIR, 'vectorizer.pkl'), 'wb') as f:
             pickle.dump(self.vectorizer, f)
-    
+
+        if _mongo_available:
+            try:
+                if self.dataset is not None:
+                    db.save_dataset(self.dataset.to_dict('records'))
+                db.save_metrics(self.model_metrics)
+                print(f"[MongoDB] Saved — dataset: {len(self.dataset) if self.dataset is not None else 0} rows, "
+                      f"accuracy: {round(self.model_metrics.get('accuracy', 0)*100, 1)}%")
+                return
+            except Exception as e:
+                print(f"[MongoDB] save_model failed: {e} — falling back to files")
+
+        # File fallback
+        if self.dataset is not None:
+            self.dataset.to_csv(os.path.join(MODELS_DIR, 'dataset.csv'), index=False)
+        state = {
+            'model_metrics':      self.model_metrics,
+            'total_predictions':  self.total_predictions,
+            'user_feedback_data': self.user_feedback_data,
+            'analyzed_reviews':   self.analyzed_reviews,
+        }
+        with open(os.path.join(MODELS_DIR, 'state.json'), 'w') as f:
+            json.dump(state, f, indent=2)
+        print(f"[File] Saved — dataset: {len(self.dataset) if self.dataset is not None else 0} rows")
+
+    def _save_state(self):
+        """Lightweight save: persist counters/metrics without rewriting pkl files."""
+        import json
+        if _mongo_available:
+            try:
+                db.save_metrics(self.model_metrics)
+                return
+            except Exception as e:
+                print(f"[MongoDB] _save_state failed: {e} — falling back to file")
+        # File fallback
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        state = {
+            'model_metrics':      self.model_metrics,
+            'total_predictions':  self.total_predictions,
+            'user_feedback_data': self.user_feedback_data,
+            'analyzed_reviews':   self.analyzed_reviews,
+        }
+        with open(os.path.join(MODELS_DIR, 'state.json'), 'w') as f:
+            json.dump(state, f, indent=2)
+
     def load_model(self):
-        """Load the trained model and vectorizer"""
+        """Load sklearn pkl + restore all state from MongoDB (or files as fallback)."""
+        import json
+        model_path      = os.path.join(MODELS_DIR, 'sentiment_model.pkl')
+        vectorizer_path = os.path.join(MODELS_DIR, 'vectorizer.pkl')
+
+        if not (os.path.exists(model_path) and os.path.exists(vectorizer_path)):
+            return False
+
         try:
-            with open('models/sentiment_model.pkl', 'rb') as f:
+            with open(model_path, 'rb') as f:
                 self.model = pickle.load(f)
-            with open('models/vectorizer.pkl', 'rb') as f:
+            with open(vectorizer_path, 'rb') as f:
                 self.vectorizer = pickle.load(f)
             self.is_trained = True
-            
-            # Initialize dataset if not already loaded
-            if self.dataset is None:
+
+            if _mongo_available:
+                try:
+                    rows = db.load_dataset()
+                    if rows:
+                        self.dataset = pd.DataFrame(rows)
+                        print(f"[MongoDB] Dataset restored: {len(self.dataset)} rows")
+                    else:
+                        self.dataset = self.create_sample_dataset()
+                        db.save_dataset(self.dataset.to_dict('records'))
+                        print("[MongoDB] No dataset found — seeded from sample data")
+
+                    self.model_metrics = db.load_latest_metrics()
+                    self.model_metrics.pop('_id', None)
+                    self.model_metrics.pop('created_at', None)
+
+                    self.total_predictions  = db.get_total_predictions()
+                    self.user_feedback_data = db.load_pending_feedback()
+
+                    print(f"[MongoDB] State restored — accuracy: "
+                          f"{round(self.model_metrics.get('accuracy', 0)*100, 1)}%, "
+                          f"predictions: {self.total_predictions}, "
+                          f"feedback pending: {len(self.user_feedback_data)}")
+
+                    if not self.model_metrics:
+                        print("[MongoDB] No metrics found — recomputing...")
+                        self.train_model(self.dataset)
+                    return True
+                except Exception as e:
+                    print(f"[MongoDB] load_model failed: {e} — falling back to files")
+
+            # File fallback
+            dataset_path = os.path.join(MODELS_DIR, 'dataset.csv')
+            if os.path.exists(dataset_path):
+                self.dataset = pd.read_csv(dataset_path)
+                print(f"[File] Dataset restored: {len(self.dataset)} rows")
+            else:
                 self.dataset = self.create_sample_dataset()
-                print("Dataset initialized from sample data")
-            
+                print("[File] No saved dataset — initialised from sample data")
+
+            state_path = os.path.join(MODELS_DIR, 'state.json')
+            if os.path.exists(state_path):
+                with open(state_path, 'r') as f:
+                    state = json.load(f)
+                self.model_metrics      = state.get('model_metrics', {})
+                self.total_predictions  = state.get('total_predictions', 0)
+                self.user_feedback_data = state.get('user_feedback_data', [])
+                self.analyzed_reviews   = state.get('analyzed_reviews', [])
+                print(f"[File] State restored — accuracy: "
+                      f"{round(self.model_metrics.get('accuracy', 0)*100, 1)}%, "
+                      f"predictions: {self.total_predictions}")
+            else:
+                print("[File] No saved state — recomputing metrics...")
+                self.train_model(self.dataset)
+
             return True
-        except FileNotFoundError:
+        except Exception as e:
+            print(f"Error loading model: {e}")
             return False
-    
+
     def add_user_feedback(self, text, predicted_sentiment, actual_sentiment, confidence):
-        """Add user feedback to improve the model"""
+        """Add user feedback to improve the model."""
         feedback_entry = {
-            'text': text,
+            'text':                text,
             'predicted_sentiment': predicted_sentiment,
-            'actual_sentiment': actual_sentiment,
-            'confidence': confidence,
-            'timestamp': pd.Timestamp.now().isoformat()
+            'actual_sentiment':    actual_sentiment,
+            'confidence':          confidence,
+            'timestamp':           pd.Timestamp.now().isoformat()
         }
         self.user_feedback_data.append(feedback_entry)
-        
-        # Check if we should retrain
+
+        # Persist to MongoDB immediately so feedback survives restarts
+        if _mongo_available:
+            try:
+                db.save_feedback(text, predicted_sentiment, actual_sentiment, confidence)
+            except Exception as e:
+                print(f"[MongoDB] save_feedback failed: {e}")
+        else:
+            self._save_state()
+
         if len(self.user_feedback_data) >= self.retrain_threshold:
             self.retrain_with_feedback()
-    
+
     def retrain_with_feedback(self):
-        """Retrain the model with user feedback data"""
+        """Retrain the model using accumulated user feedback."""
         if not self.user_feedback_data:
             return
-        
-        # Convert feedback to DataFrame
+
         feedback_df = pd.DataFrame(self.user_feedback_data)
-        
-        # Add feedback data to existing dataset
         new_data = pd.DataFrame({
-            'review': feedback_df['text'],
+            'review':    feedback_df['text'],
             'sentiment': feedback_df['actual_sentiment']
         })
-        
-        if self.dataset is not None:
-            combined_df = pd.concat([self.dataset, new_data], ignore_index=True)
-        else:
-            combined_df = new_data
-        
-        # Retrain the model
-        print(f"Retraining model with {len(combined_df)} samples (including {len(new_data)} new feedback samples)")
+
+        combined_df = pd.concat([self.dataset, new_data], ignore_index=True) \
+                      if self.dataset is not None else new_data
+
+        print(f"Retraining with {len(combined_df)} samples "
+              f"({len(new_data)} from feedback)")
         self.train_model(combined_df, incremental=True)
-        
-        # Clear feedback data after retraining
+
+        # Mark feedback as used in MongoDB
+        if _mongo_available:
+            try:
+                db.mark_feedback_used()
+            except Exception as e:
+                print(f"[MongoDB] mark_feedback_used failed: {e}")
+
         self.user_feedback_data = []
+
     
     def batch_predict(self, texts):
         """Predict sentiment for multiple texts"""
@@ -512,25 +655,49 @@ class SentimentAnalyzer:
         return results
     
     def get_dataset_stats(self):
-        """Get comprehensive dataset statistics"""
+        """Get comprehensive dataset statistics — pulls live counts from MongoDB when connected."""
+        if _mongo_available:
+            try:
+                total          = db.get_dataset_count()
+                sentiment_dist = db.get_sentiment_distribution()
+                total_preds    = db.get_total_predictions()
+                feedback_count = db.get_feedback_count()
+                avg_len = self.dataset['review'].str.len().mean() \
+                          if self.dataset is not None else 0
+                return {
+                    'total_reviews':            total,
+                    'sentiment_distribution':   sentiment_dist,
+                    'average_review_length':    avg_len,
+                    'feedback_samples':         feedback_count,
+                    'analyzed_reviews_pending': len(self.analyzed_reviews),
+                    'last_retrain':             self.model_metrics.get('last_updated', 'Never'),
+                    'model_accuracy':           self.model_metrics.get('accuracy', 0),
+                    'total_predictions':        total_preds,
+                    'precision':                self.model_metrics.get('precision', 0),
+                    'recall':                   self.model_metrics.get('recall', 0),
+                    'f1_score':                 self.model_metrics.get('f1_score', 0),
+                    'storage':                  'mongodb',
+                }
+            except Exception as e:
+                print(f"[MongoDB] get_dataset_stats failed: {e}")
+
+        # File / in-memory fallback
         if self.dataset is None:
             return None
-        
-        stats = {
-            'total_reviews': len(self.dataset),
-            'sentiment_distribution': self.dataset['sentiment'].value_counts().to_dict(),
-            'average_review_length': self.dataset['review'].str.len().mean(),
-            'feedback_samples': len(self.user_feedback_data),
+        return {
+            'total_reviews':            len(self.dataset),
+            'sentiment_distribution':   self.dataset['sentiment'].value_counts().to_dict(),
+            'average_review_length':    self.dataset['review'].str.len().mean(),
+            'feedback_samples':         len(self.user_feedback_data),
             'analyzed_reviews_pending': len(self.analyzed_reviews),
-            'last_retrain': self.model_metrics.get('last_updated', 'Never'),
-            'model_accuracy': self.model_metrics.get('accuracy', 0),
-            'total_predictions': self.total_predictions,
-            'precision': self.model_metrics.get('precision', 0),
-            'recall': self.model_metrics.get('recall', 0),
-            'f1_score': self.model_metrics.get('f1_score', 0)
+            'last_retrain':             self.model_metrics.get('last_updated', 'Never'),
+            'model_accuracy':           self.model_metrics.get('accuracy', 0),
+            'total_predictions':        self.total_predictions,
+            'precision':                self.model_metrics.get('precision', 0),
+            'recall':                   self.model_metrics.get('recall', 0),
+            'f1_score':                 self.model_metrics.get('f1_score', 0),
+            'storage':                  'file',
         }
-        
-        return stats
 
 # Initialize the sentiment analyzer
 analyzer = SentimentAnalyzer()
@@ -543,7 +710,32 @@ if not analyzer.load_model():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'model_trained': analyzer.is_trained})
+    return jsonify({
+        'status': 'healthy',
+        'model_trained': analyzer.is_trained,
+        'mongodb': 'connected' if _mongo_available else 'not connected (using file storage)'
+    })
+
+@app.route('/api/db-status', methods=['GET'])
+def db_status():
+    """Check MongoDB connection status and collection counts."""
+    if not _mongo_available:
+        return jsonify({
+            'connected': False,
+            'message': 'MongoDB not configured. Set MONGO_URI in backend/.env'
+        })
+    try:
+        return jsonify({
+            'connected':        True,
+            'database':         db.MONGO_DB_NAME,
+            'dataset_count':    db.get_dataset_count(),
+            'prediction_count': db.get_total_predictions(),
+            'feedback_count':   db.get_feedback_count(),
+            'sentiment_dist':   db.get_sentiment_distribution(),
+        })
+    except Exception as e:
+        return jsonify({'connected': False, 'error': str(e)}), 500
+
 
 @app.route('/api/train', methods=['POST'])
 def train_model():
