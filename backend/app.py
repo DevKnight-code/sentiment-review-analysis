@@ -520,6 +520,15 @@ class SentimentAnalyzer:
                 self.retrain_with_feedback()
             else:
                 self._retrain_with_analyzed_reviews()
+
+            # Safety net: always mark feedback as used after successful retrain
+            if _mongo_available:
+                try:
+                    db.mark_feedback_used()
+                except Exception:
+                    pass
+            self.user_feedback_data = []
+
             self._retrain_status = 'done'
             self._retrain_error  = None
         except Exception as e:
