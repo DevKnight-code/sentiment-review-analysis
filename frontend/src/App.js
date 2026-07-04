@@ -4,8 +4,11 @@ import { Brain, BarChart3, MessageSquare, Upload, TrendingUp, FileText, Download
 import axios from 'axios';
 import './App.css';
 
-// API configuration - uses environment variable in production and localhost for development
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+// API configuration - uses environment variable in production and localhost in development
+const API_BASE_URL = process.env.REACT_APP_API_URL ||
+  ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? 'http://localhost:5000/api'
+    : 'https://sentiment-backend.onrender.com/api');
 
 // Global state for metrics refresh
 let globalMetricsRefresh = 0;
