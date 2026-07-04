@@ -13,6 +13,7 @@ from nltk.tokenize import word_tokenize
 import re
 import pickle
 import os
+import threading
 import seaborn as sns
 import matplotlib.pyplot as plt
 from io import BytesIO
@@ -97,6 +98,9 @@ class SentimentAnalyzer:
         self.retrain_threshold = 10  # Retrain after 10 new samples
         self.total_predictions = 0
         self.analyzed_reviews = []  # Store analyzed reviews for dataset expansion
+        self._retrain_lock = threading.Lock()   # prevent concurrent retrains
+        self._retrain_status = 'idle'           # 'idle' | 'running' | 'done' | 'error'
+        self._retrain_error  = None
         
     def preprocess_text(self, text):
         """Enhanced preprocessing to reduce bias and improve accuracy"""
@@ -504,20 +508,69 @@ class SentimentAnalyzer:
                 self.train_model(combined_df, incremental=False)
 
         self.analyzed_reviews = []
-    
+
+    # ── Background-thread retrain helpers ─────────────────────────────────────
+
+    def _do_retrain_bg(self, use_feedback: bool):
+        """Actual retrain logic — runs inside a daemon thread."""
+        try:
+            if use_feedback:
+                self.retrain_with_feedback()
+            else:
+                self._retrain_with_analyzed_reviews()
+            self._retrain_status = 'done'
+            self._retrain_error  = None
+        except Exception as e:
+            self._retrain_status = 'error'
+            self._retrain_error  = str(e)
+            print(f"[Retrain] Background retrain failed: {e}")
+
+    def start_retrain_bg(self, use_feedback: bool = False):
+        """
+        Kick off retraining in a background thread so the HTTP request
+        returns immediately and never times out.
+        Returns True if started, False if one is already running.
+        """
+        if not self._retrain_lock.acquire(blocking=False):
+            return False   # already running
+
+        self._retrain_status = 'running'
+        self._retrain_error  = None
+
+        def run():
+            try:
+                self._do_retrain_bg(use_feedback)
+            finally:
+                self._retrain_lock.release()
+
+        threading.Thread(target=run, daemon=True).start()
+        return True
+
     def save_model(self):
-        """Save sklearn pkl to disk + all state to MongoDB (or files as fallback)."""
+        """Save sklearn pkl to disk AND to MongoDB (so they survive Render restarts)."""
         import json
         os.makedirs(MODELS_DIR, exist_ok=True)
 
-        # Always save pkl files to disk (sklearn objects aren't stored in Mongo)
+        # Pickle to bytes in memory
+        import io
+        model_buf = io.BytesIO()
+        pickle.dump(self.model, model_buf)
+        model_bytes = model_buf.getvalue()
+
+        vec_buf = io.BytesIO()
+        pickle.dump(self.vectorizer, vec_buf)
+        vec_bytes = vec_buf.getvalue()
+
+        # Write to disk (fast path for same-process reloads)
         with open(os.path.join(MODELS_DIR, 'sentiment_model.pkl'), 'wb') as f:
-            pickle.dump(self.model, f)
+            f.write(model_bytes)
         with open(os.path.join(MODELS_DIR, 'vectorizer.pkl'), 'wb') as f:
-            pickle.dump(self.vectorizer, f)
+            f.write(vec_bytes)
 
         if _mongo_available:
             try:
+                # Persist pkl blobs to MongoDB so they survive redeploys
+                db.save_model_binaries(model_bytes, vec_bytes, np.__version__)
                 if self.dataset is not None:
                     db.save_dataset(self.dataset.to_dict('records'))
                 db.save_metrics(self.model_metrics)
@@ -561,28 +614,51 @@ class SentimentAnalyzer:
             json.dump(state, f, indent=2)
 
     def load_model(self):
-        """Load sklearn pkl + restore all state from MongoDB (or files as fallback)."""
+        """Load sklearn pkl from MongoDB (preferred) or disk, then restore all state."""
         import json
         model_path      = os.path.join(MODELS_DIR, 'sentiment_model.pkl')
         vectorizer_path = os.path.join(MODELS_DIR, 'vectorizer.pkl')
 
-        if not (os.path.exists(model_path) and os.path.exists(vectorizer_path)):
-            return False
+        loaded = False
 
-        try:
-            # Try to load pickled models with error handling for numpy compatibility
+        # ── 1. Try loading pkl blobs from MongoDB ────────────────────────────
+        if _mongo_available:
+            try:
+                model_bytes, vec_bytes, saved_numpy = db.load_model_binaries()
+                if model_bytes and vec_bytes:
+                    import io
+                    self.model      = pickle.loads(model_bytes)
+                    self.vectorizer = pickle.loads(vec_bytes)
+                    self.is_trained = True
+                    loaded = True
+                    print(f"[MongoDB] Model binaries loaded (saved with numpy {saved_numpy})")
+            except Exception as e:
+                print(f"[MongoDB] load_model_binaries failed: {e} — will try disk")
+
+        # ── 2. Fall back to disk pkl files ───────────────────────────────────
+        if not loaded:
+            if not (os.path.exists(model_path) and os.path.exists(vectorizer_path)):
+                return False
             try:
                 with open(model_path, 'rb') as f:
                     self.model = pickle.load(f)
                 with open(vectorizer_path, 'rb') as f:
                     self.vectorizer = pickle.load(f)
+                self.is_trained = True
+                loaded = True
+                print("[File] Model loaded from disk pkl files")
             except (ModuleNotFoundError, AttributeError) as e:
-                # Numpy compatibility issue - models were pickled with old numpy version
                 print(f"[Model] Warning: Could not load pickled model ({e}) — will retrain")
                 return False
-            
-            self.is_trained = True
+            except Exception as e:
+                print(f"[Model] Unexpected error loading pkl: {e} — will retrain")
+                return False
 
+        if not loaded:
+            return False
+
+        # ── 3. Restore state / dataset ───────────────────────────────────────
+        try:
             if _mongo_available:
                 try:
                     rows = db.load_dataset()
@@ -611,9 +687,9 @@ class SentimentAnalyzer:
                         self.train_model(self.dataset)
                     return True
                 except Exception as e:
-                    print(f"[MongoDB] load_model failed: {e} — falling back to files")
+                    print(f"[MongoDB] load_model state restore failed: {e} — falling back to files")
 
-            # File fallback
+            # File fallback for state
             dataset_path = os.path.join(MODELS_DIR, 'dataset.csv')
             if os.path.exists(dataset_path):
                 self.dataset = pd.read_csv(dataset_path)
@@ -639,7 +715,7 @@ class SentimentAnalyzer:
 
             return True
         except Exception as e:
-            print(f"Error loading model: {e}")
+            print(f"Error restoring model state: {e}")
             return False
 
     def add_user_feedback(self, text, predicted_sentiment, actual_sentiment, confidence):
@@ -989,16 +1065,19 @@ def get_dataset_stats():
 
 @app.route('/api/retrain', methods=['POST'])
 def force_retrain():
-    """Force model retraining with all data in MongoDB (feedback + analyzed reviews)."""
+    """
+    Start model retraining in a background thread.
+    Returns 202 Accepted immediately — poll /api/retrain-status to check progress.
+    """
     try:
         has_feedback = bool(analyzer.user_feedback_data)
         has_analyzed = bool(analyzer.analyzed_reviews)
 
-        # Also check MongoDB directly — in-memory lists reset on restart
+        # Check MongoDB directly — in-memory lists reset on restart
         if _mongo_available:
             try:
                 has_feedback = has_feedback or db.get_feedback_count() > 0
-                has_analyzed = has_analyzed or db.get_dataset_count() > 152  # > base sample size
+                has_analyzed = has_analyzed or db.get_dataset_count() > 152
             except Exception:
                 pass
 
@@ -1006,18 +1085,39 @@ def force_retrain():
             return jsonify({'error': 'No new data available for retraining. '
                                      'Submit some reviews or feedback first.'}), 400
 
-        if has_feedback:
-            analyzer.retrain_with_feedback()
-        else:
-            analyzer._retrain_with_analyzed_reviews()
+        started = analyzer.start_retrain_bg(use_feedback=has_feedback)
+        if not started:
+            return jsonify({
+                'success': True,
+                'status':  'running',
+                'message': 'Retraining is already in progress.'
+            }), 202
 
         return jsonify({
             'success': True,
-            'message': 'Model retrained successfully',
-            'metrics': analyzer.model_metrics
-        })
+            'status':  'running',
+            'message': 'Retraining started in background. Poll /api/retrain-status for updates.'
+        }), 202
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/retrain-status', methods=['GET'])
+def retrain_status():
+    """Poll retraining progress."""
+    status = analyzer._retrain_status   # 'idle' | 'running' | 'done' | 'error'
+    resp = {
+        'success': True,
+        'status':  status,
+    }
+    if status == 'done':
+        resp['metrics'] = analyzer.model_metrics
+        analyzer._retrain_status = 'idle'   # reset so next poll is clean
+    elif status == 'error':
+        resp['error'] = analyzer._retrain_error
+        analyzer._retrain_status = 'idle'
+    return jsonify(resp)
 
 @app.route('/api/retrain-analyzed', methods=['POST'])
 def retrain_with_analyzed():

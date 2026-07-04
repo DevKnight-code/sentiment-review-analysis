@@ -223,3 +223,47 @@ def load_latest_metrics() -> dict:
     col = get_metrics_col()
     doc = col.find_one({}, {"_id": 0}, sort=[("created_at", DESCENDING)])
     return doc or {}
+
+
+# ── Model Binaries (pkl) ──────────────────────────────────────────────────────
+
+def get_model_col():
+    return get_db()["model_binaries"]
+
+
+def save_model_binaries(model_bytes: bytes, vectorizer_bytes: bytes, numpy_version: str):
+    """
+    Upsert the two pkl blobs into MongoDB so they survive Render's ephemeral
+    filesystem across redeploys / restarts.
+    Stores them as two separate docs keyed by name.
+    """
+    col = get_model_col()
+    for name, data in [("sentiment_model", model_bytes), ("vectorizer", vectorizer_bytes)]:
+        col.update_one(
+            {"name": name},
+            {"$set": {
+                "name":          name,
+                "data":          data,
+                "numpy_version": numpy_version,
+                "updated_at":    datetime.utcnow(),
+            }},
+            upsert=True,
+        )
+    print(f"[MongoDB] Model binaries saved (numpy {numpy_version})")
+
+
+def load_model_binaries() -> tuple[bytes | None, bytes | None, str | None]:
+    """
+    Return (model_bytes, vectorizer_bytes, numpy_version) or (None, None, None)
+    if not found.
+    """
+    col = get_model_col()
+    model_doc = col.find_one({"name": "sentiment_model"})
+    vec_doc   = col.find_one({"name": "vectorizer"})
+    if not model_doc or not vec_doc:
+        return None, None, None
+    return (
+        bytes(model_doc["data"]),
+        bytes(vec_doc["data"]),
+        model_doc.get("numpy_version"),
+    )

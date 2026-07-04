@@ -5,7 +5,7 @@ services:
     region: oregon
     plan: free
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt && (cd frontend && npm install && npm run build) || echo "Frontend build skipped (build already committed)"
-    startCommand: gunicorn backend.app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --access-logfile - --error-logfile -
+    startCommand: gunicorn backend.app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120 --worker-class gthread --access-logfile - --error-logfile -
     envVars:
       - key: PYTHON_VERSION
         value: "3.11"

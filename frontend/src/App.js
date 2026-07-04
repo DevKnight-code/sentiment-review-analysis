@@ -591,13 +591,37 @@ const ModelMetrics = () => {
     setRetraining(true);
     setRetrainMsg('');
     try {
-      const response = await axios.post(`${API_BASE_URL}/retrain`);
-      setMetrics(response.data.metrics);
-      await fetchDatasetStats();
-      setRetrainMsg('Model retrained successfully!');
+      // Start retraining (returns 202 immediately — runs in background)
+      await axios.post(`${API_BASE_URL}/retrain`);
+      setRetrainMsg('Retraining started… this may take up to 30 seconds.');
+
+      // Poll /api/retrain-status every 3 seconds until done or error
+      const poll = async () => {
+        try {
+          const statusRes = await axios.get(`${API_BASE_URL}/retrain-status`);
+          const { status, metrics, error } = statusRes.data;
+
+          if (status === 'done') {
+            if (metrics) setMetrics(metrics);
+            await fetchDatasetStats();
+            setRetrainMsg('Model retrained successfully!');
+            setRetraining(false);
+          } else if (status === 'error') {
+            setRetrainMsg('Retrain failed: ' + (error || 'Unknown error'));
+            setRetraining(false);
+          } else {
+            // still running — poll again
+            setTimeout(poll, 3000);
+          }
+        } catch (pollErr) {
+          setRetrainMsg('Could not get retrain status: ' + pollErr.message);
+          setRetraining(false);
+        }
+      };
+      setTimeout(poll, 3000);
+
     } catch (err) {
       setRetrainMsg('Retrain failed: ' + (err.response?.data?.error || err.message));
-    } finally {
       setRetraining(false);
     }
   };
