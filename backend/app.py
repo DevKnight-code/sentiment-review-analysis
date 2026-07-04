@@ -546,10 +546,17 @@ class SentimentAnalyzer:
             return False
 
         try:
-            with open(model_path, 'rb') as f:
-                self.model = pickle.load(f)
-            with open(vectorizer_path, 'rb') as f:
-                self.vectorizer = pickle.load(f)
+            # Try to load pickled models with error handling for numpy compatibility
+            try:
+                with open(model_path, 'rb') as f:
+                    self.model = pickle.load(f)
+                with open(vectorizer_path, 'rb') as f:
+                    self.vectorizer = pickle.load(f)
+            except (ModuleNotFoundError, AttributeError) as e:
+                # Numpy compatibility issue - models were pickled with old numpy version
+                print(f"[Model] Warning: Could not load pickled model ({e}) — will retrain")
+                return False
+            
             self.is_trained = True
 
             if _mongo_available:
