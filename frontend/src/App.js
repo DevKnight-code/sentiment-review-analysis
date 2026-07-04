@@ -87,13 +87,6 @@ const SentimentAnalyzer = () => {
       setResult(response.data);
       // Trigger global metrics update
       triggerMetricsRefresh();
-      
-      // Show notification if review was added to dataset
-      if (response.data.reliability === 'high') {
-        setTimeout(() => {
-          alert('This high-confidence review has been automatically added to the training dataset!');
-        }, 1000);
-      }
     } catch (err) {
       setError('Failed to analyze sentiment. Please try again.');
       console.error('Error:', err);

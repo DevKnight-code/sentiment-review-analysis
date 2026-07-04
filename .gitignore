@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 frontend/node_modules/
+frontend/build/
 __pycache__/
 *.pyc
 *.pyo
@@ -70,7 +71,6 @@ jspm_packages/
 .env.production.local
 
 # Build outputs
-build/
 dist/
 *.egg-info/
 
@@ -82,8 +82,8 @@ models/*.joblib
 *.tmp
 *.temp
 
-# React build
-frontend/build/
+# React build — keep in repo so Flask can serve it without npm on Render
+# frontend/build/
 
 # Python virtual environment
 backend/venv/

@@ -827,7 +827,9 @@ def predict_sentiment():
             'text': text,
             'sentiment': result['prediction'],
             'probabilities': result['probabilities'],
-            'confidence': result['confidence']
+            'confidence': result['confidence'],
+            'reliability': result.get('reliability', 'medium'),
+            'confidence_level': result.get('confidence_level', 'medium')
         })
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
