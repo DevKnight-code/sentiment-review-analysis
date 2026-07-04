@@ -1,3 +1,4 @@
+
 # Sentiment Analysis of Product Reviews using Naive Bayes
 
 This project implements a comprehensive sentiment analysis system for product reviews using Natural Language Processing (NLP) techniques and the Naive Bayes machine learning algorithm. The system consists of a Python Flask backend for the AI model and a React.js frontend for the user interface.
@@ -209,3 +210,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ---
 
 **Note**: This project is for educational purposes and demonstrates the application of machine learning and natural language processing techniques for sentiment analysis.
+
