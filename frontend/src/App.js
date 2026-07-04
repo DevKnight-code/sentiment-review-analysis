@@ -4,8 +4,8 @@ import { Brain, BarChart3, MessageSquare, Upload, TrendingUp, FileText, Download
 import axios from 'axios';
 import './App.css';
 
-// API configuration
-const API_BASE_URL = 'http://localhost:5000/api';
+// API configuration - uses environment variable or defaults to localhost for development
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 // Global state for metrics refresh
 let globalMetricsRefresh = 0;

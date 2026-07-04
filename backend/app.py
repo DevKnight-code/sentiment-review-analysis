@@ -19,7 +19,19 @@ from io import BytesIO
 import base64
 
 app = Flask(__name__)
-CORS(app)
+
+# Configure CORS for both local development and production
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "http://localhost:3000",           # Local development
+            "https://*.onrender.com",          # Render domains
+            "http://127.0.0.1:3000"            # Local testing
+        ],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 # Use path relative to this script so it works regardless of cwd
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -950,4 +962,7 @@ def export_dataset():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    debug_mode = os.environ.get('FLASK_ENV', 'development') == 'development'
+    app.run(debug=debug_mode, host='0.0.0.0', port=port)
