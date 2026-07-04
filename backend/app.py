@@ -18,11 +18,10 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
 
-# Configure Flask for serving frontend
-app = Flask(__name__, static_folder=None)
-
 # Set up static file serving for the React build
 FRONTEND_BUILD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'frontend', 'build')
+
+# Configure Flask for serving frontend
 if os.path.exists(FRONTEND_BUILD_DIR):
     app = Flask(__name__, static_folder=FRONTEND_BUILD_DIR, static_url_path='')
 else:
@@ -997,7 +996,11 @@ def export_dataset():
 # Catch-all route to serve index.html for React Router
 @app.route('/<path:path>')
 def serve_frontend(path):
-    """Serve React frontend files or fallback to index.html"""
+    """Serve React frontend files or fallback to index.html for React Router"""
+    # Don't handle API routes here - they're handled by explicit routes above
+    if path.startswith('api/'):
+        return jsonify({'error': 'Not found'}), 404
+    
     file_path = os.path.join(FRONTEND_BUILD_DIR, path)
     
     # If the file exists in the build directory, serve it
