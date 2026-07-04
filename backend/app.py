@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import pandas as pd
 import numpy as np
@@ -18,7 +18,15 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
 
-app = Flask(__name__)
+# Configure Flask for serving frontend
+app = Flask(__name__, static_folder=None)
+
+# Set up static file serving for the React build
+FRONTEND_BUILD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'frontend', 'build')
+if os.path.exists(FRONTEND_BUILD_DIR):
+    app = Flask(__name__, static_folder=FRONTEND_BUILD_DIR, static_url_path='')
+else:
+    app = Flask(__name__)
 
 # Configure CORS for both local development and production
 CORS(app, resources={
@@ -732,18 +740,16 @@ if not analyzer.load_model():
     analyzer.train_model()
 
 @app.route('/', methods=['GET'])
-def index():
-    """Root endpoint for basic service health and API info."""
+def serve_root():
+    """Serve the React frontend index.html"""
+    index_path = os.path.join(FRONTEND_BUILD_DIR, 'index.html')
+    if os.path.exists(index_path):
+        return send_from_directory(FRONTEND_BUILD_DIR, 'index.html')
     return jsonify({
         'status': 'ok',
         'service': 'sentiment-review-analysis',
         'message': 'Backend is running',
-        'endpoints': [
-            '/api/health',
-            '/api/predict',
-            '/api/metrics',
-            '/api/sample-dataset'
-        ]
+        'note': 'Frontend build not found. Run: cd frontend && npm run build'
     })
 
 @app.route('/api/health', methods=['GET'])
@@ -987,6 +993,24 @@ def export_dataset():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# Catch-all route to serve index.html for React Router
+@app.route('/<path:path>')
+def serve_frontend(path):
+    """Serve React frontend files or fallback to index.html"""
+    file_path = os.path.join(FRONTEND_BUILD_DIR, path)
+    
+    # If the file exists in the build directory, serve it
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        return send_from_directory(FRONTEND_BUILD_DIR, path)
+    
+    # Otherwise, serve index.html for React Router to handle
+    index_path = os.path.join(FRONTEND_BUILD_DIR, 'index.html')
+    if os.path.exists(index_path):
+        return send_from_directory(FRONTEND_BUILD_DIR, 'index.html')
+    
+    # If build doesn't exist, return 404
+    return jsonify({'error': 'Not found'}), 404
 
 if __name__ == '__main__':
     import os
