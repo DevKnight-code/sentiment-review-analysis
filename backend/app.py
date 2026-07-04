@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault('MPLBACKEND', 'Agg')  # prevent matplotlib GUI crash on headless servers
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import pandas as pd
@@ -12,10 +15,11 @@ from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
 import re
 import pickle
-import os
 import threading
-import seaborn as sns
+import matplotlib
+matplotlib.use('Agg')  # must be set before importing pyplot — prevents GUI crash on headless servers
 import matplotlib.pyplot as plt
+import seaborn as sns
 from io import BytesIO
 import base64
 
@@ -61,15 +65,16 @@ except Exception as _e:
     _mongo_available = False
     print(f"[MongoDB] Unavailable ({_e}) — using file-based persistence")
 
-# Download required NLTK data - with better error handling
+# Download required NLTK data
 nltk_downloads = [
-    ('punkt', 'tokenizers/punkt'),
-    ('stopwords', 'corpora/stopwords')
+    ('punkt',         'tokenizers/punkt'),
+    ('punkt_tab',     'tokenizers/punkt_tab'),
+    ('stopwords',     'corpora/stopwords'),
 ]
 
-for resource, path in nltk_downloads:
+for resource, resource_path in nltk_downloads:
     try:
-        nltk.data.find(path)
+        nltk.data.find(resource_path)
     except LookupError:
         try:
             nltk.download(resource, quiet=True)
