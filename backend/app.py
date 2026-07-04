@@ -39,7 +39,11 @@ MODELS_DIR = os.path.join(BASE_DIR, 'models')
 
 # MongoDB — imported lazily so the app still starts without a configured URI
 try:
+    from . import database as db
+except ImportError:
     import database as db
+
+try:
     _mongo_available = db.is_connected()
     if _mongo_available:
         print("[MongoDB] Connection established — using MongoDB for persistence")
