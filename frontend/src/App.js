@@ -8,7 +8,7 @@ import './App.css';
 const API_BASE_URL = process.env.REACT_APP_API_URL ||
   ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
     ? 'http://localhost:5000/api'
-    : 'https://sentiment-backend.onrender.com/api');
+    : 'https://sentiment-review-analysis.onrender.com/api');
 
 // Global state for metrics refresh
 let globalMetricsRefresh = 0;
